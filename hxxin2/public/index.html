@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>암호화 채팅</title>
+
+    <style>
+        body {
+            margin: 0;
+            font-family: sans-serif;
+            background-color: #f0f0f0;
+        }
+
+        h1 {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        .layout {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .chat-container {
+            width: 600px;
+            height: 500px;
+            border: 1px solid #ccc;
+            background: white;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-box {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .message {
+            padding: 10px 14px;
+            background: #e9e9e9;
+            border-radius: 10px;
+            max-width: 70%;
+        }
+
+        .input-box {
+            border-top: 1px solid #ccc;
+            padding: 10px;
+        }
+
+        input {
+            width: 95%;
+            padding: 10px;
+        }
+
+        .user-list {
+            width: 200px;
+            height: 500px;
+            background: white;
+            border: 1px solid #ccc;
+            padding: 10px;
+        }
+
+        .invite-btn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 8px 16px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 6px;
+        }
+
+        .modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.4);
+            display: none;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 20px;
+            width: 300px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .link-box {
+            margin-top: 10px;
+            background: #eee;
+            padding: 10px;
+            display: none;
+            word-break: break-all;
+        }
+    </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/crypto-js@4.2.0/crypto-js.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+
+<body>
+
+<!-- 닉네임 모달 -->
+<div id="nicknameModal" class="modal" style="display:flex;">
+    <div class="modal-content">
+        <h2>닉네임 입력</h2>
+        <input type="text" id="nicknameInput" placeholder="닉네임">
+        <button onclick="setNickname()">입장</button>
+    </div>
+</div>
+
+<h1>암호화 채팅</h1>
+
+<button class="invite-btn" onclick="openInviteModal()">초대</button>
+
+<div class="layout">
+
+    <div class="chat-container">
+        <div class="chat-box" id="chatBox"></div>
+
+        <div class="input-box">
+            <input type="text" id="input" placeholder="메시지 입력">
+        </div>
+    </div>
+
+    <div class="user-list">
+        <h3>접속자</h3>
+        <ul id="userList"></ul>
+    </div>
+
+</div>
+
+<!-- 초대 모달 -->
+<div class="modal" id="inviteModal">
+    <div class="modal-content">
+        <h2>초대 링크</h2>
+
+        <button onclick="createInvite()">링크 생성</button>
+
+        <div id="linkArea" class="link-box"></div>
+
+        <button id="copyBtn" style="display:none;" onclick="copyLink()">복사</button>
+
+        <button onclick="closeInviteModal()">닫기</button>
+    </div>
+</div>
+
+<script>
+
+const socket = io();
+let SECRET_KEY = "";
+
+const input = document.getElementById("input");
+const chatBox = document.getElementById("chatBox");
+const userList = document.getElementById("userList");
+
+let nickname = "";
+let isJoined = false;
+
+/* ================= 닉네임 ================= */
+
+function setNickname() {
+
+    const name = document.getElementById("nicknameInput").value.trim();
+
+    // 채팅방 암호 입력
+    const roomPassword = prompt("채팅방 암호를 입력하세요.");
+
+    if (!roomPassword) {
+        alert("암호를 입력해야 합니다.");
+        return;
+    }
+
+    // AES 키 생성 (메시지 암호화용 - 서버로 절대 전송 안 함)
+    SECRET_KEY = CryptoJS.SHA256(roomPassword).toString();
+
+    // 방 구분용 ID (암호화 키와는 다른 salt로 별도 해시)
+    // -> 서버는 이 값만 보고, 실제 암호나 암호화 키는 알 수 없음
+    const roomId = CryptoJS.SHA256(roomPassword + "::room-id-salt").toString();
+
+    if (!name) {
+        alert("닉네임을 입력하세요.");
+        return;
+    }
+
+    nickname = name;
+
+    socket.emit("set nickname", { name: nickname, roomId: roomId });
+
+    document.getElementById("nicknameModal").style.display = "none";
+
+    isJoined = true;
+}
+
+/* ================= 메시지 전송 ================= */
+
+input.addEventListener("keypress", (e) => {
+
+    if (e.key !== "Enter") return;
+
+    if (!isJoined) return alert("닉네임 먼저 입력");
+
+    const text = input.value.trim();
+
+    if (!text) return;
+
+    const encrypted = CryptoJS.AES.encrypt(text, SECRET_KEY).toString();
+
+    socket.emit("chat message", {
+        name: nickname,
+        msg: encrypted
+    });
+
+    input.value = "";
+});
+
+/* ================= 메시지 수신 ================= */
+
+socket.on("chat message", (data) => {
+
+    const decrypted = CryptoJS.AES.decrypt(
+        data.msg,
+        SECRET_KEY
+    ).toString(CryptoJS.enc.Utf8);
+
+    const div = document.createElement("div");
+
+    div.className = "message";
+
+    div.textContent = `${data.name}: ${decrypted}`;
+
+    chatBox.appendChild(div);
+
+    chatBox.scrollTop = chatBox.scrollHeight;
+});
+
+/* ================= 접속자 ================= */
+
+socket.on("user list", (users) => {
+
+    userList.innerHTML = "";
+
+    users.forEach(name => {
+
+        const li = document.createElement("li");
+
+        li.textContent = name;
+
+        userList.appendChild(li);
+    });
+});
+
+/* ================= 초대 ================= */
+
+let currentLink = "";
+
+function openInviteModal() {
+    document.getElementById("inviteModal").style.display = "flex";
+}
+
+function closeInviteModal() {
+    document.getElementById("inviteModal").style.display = "none";
+}
+
+function createInvite() {
+
+    const code = Math.random().toString(36).substring(2, 10);
+
+    currentLink = `${location.origin}/chat/${code}`;
+
+    document.getElementById("linkArea").style.display = "block";
+    document.getElementById("copyBtn").style.display = "block";
+
+    document.getElementById("linkArea").textContent = currentLink;
+}
+
+function copyLink() {
+    navigator.clipboard.writeText(currentLink);
+    alert("복사 완료");
+}
+
+</script>
+
+</body>
+</html>
